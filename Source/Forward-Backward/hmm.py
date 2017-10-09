@@ -3,14 +3,17 @@
 import random
 import math
 
-#seed
+# seed
 seed_num = 13
 random.seed(seed_num)
 
-# global constants and variables
-num_student = 10
-num_question = 100
-num_kc = 20
+# global constants for simulated data
+num_student = None
+num_question = None
+num_kc = None
+
+
+knowledge_components = set()
 
 last = dict()  # number of the last attempt done by student
 question = dict()  # question done by Student S at attempt A
@@ -29,8 +32,13 @@ s_slip = dict()
 s_guess = dict()
 
 
-def init():
+def simulated_data():
+    global num_student, num_question, num_kc
     global initial_mastery, learn, guess, slip, last, question, answer, q_matrix
+
+    num_student = 10
+    num_question = 100
+    num_kc = 20
 
     initial_mastery = {n: 0 for n in range(1, num_kc + 1)}
     learn = {n: 0 for n in range(1, num_kc + 1)}
@@ -50,33 +58,66 @@ def init():
     q_matrix = {}
     for _question in range(1, num_question + 1):
         kc_number = random.randint(1, num_kc)
-        question_sample = [i for i in sorted(random.sample(range(1, num_kc+1), kc_number))]
+        question_sample = [i for i in sorted(random.sample(range(1, num_kc + 1), kc_number))]
         q_matrix[_question] = question_sample
+
+    for kc in range(1, num_kc+1):
+        knowledge_components.add(kc)
+
+
+def read_real_data(file_name):
+    global initial_mastery, learn, guess, slip, last, question, answer, q_matrix
+    input_data = open(file_name, "r")
+    for line in input_data:
+        fields = line.split("\t")
+        answer_s = int(fields[0])
+        student_id = fields[1]
+        question_id = fields[2]
+        skills = fields[3].split("~")
+        if student_id in last:
+            last[student_id] += 1
+        else:
+            question[student_id] = dict()
+            answer[student_id] = dict()
+            last[student_id] = 1
+        question[student_id][last[student_id]] = question_id
+        answer[student_id][last[
+            student_id]] = answer_s - 1  # Yudelson uses 2 for correct answer and 1 for incorrect. So we subtract 1 to work with our code
+        if question_id not in q_matrix:
+            q_matrix[question_id] = skills
+            # update knowledge components set
+            for kc in skills:
+                knowledge_components.add(kc)
+
+    initial_mastery = {n: 0 for n in knowledge_components}
+    learn = {n: 0 for n in knowledge_components}
+    guess = {n: 0 for n in q_matrix.keys()}
+    slip = {n: 0 for n in q_matrix.keys()}
 
 
 def fill_parameters_randomly():
     # initial mastery and learn
-    for i in range(1, num_kc + 1):
+    for i in knowledge_components:
         initial_mastery[i] = random.uniform(0.05, 0.95)
         learn[i] = random.uniform(0.05, 0.5)
     # slip and guess
-    for i in range(1, num_question + 1):
+    for i in q_matrix.keys():
         slip[i] = random.uniform(0.05, 0.45)
         guess[i] = random.uniform(0.01, 0.5)
 
 
 def filling_forward():
     forward = {}
-    for student in range(1, num_student + 1):
+    for student in last.keys():
         forward[student] = {}
-        for kc in range(1, num_kc + 1):
+        for kc in knowledge_components:
             forward[student][kc] = {}
             forward[student][kc][1] = initial_mastery[kc]
         for attempt in range(1, last[student]):
             q = question[student][attempt]
             kcs = q_matrix[q]
             nxt = attempt + 1
-            for kc in range(1, num_kc + 1):
+            for kc in knowledge_components:
                 forward[student][kc][nxt] = forward[student][kc][attempt]
             ok = 1.0
             for kc in kcs:
@@ -90,7 +131,7 @@ def filling_forward():
                 try:
                     forward[student][kc][nxt] = (y * forward[student][kc][attempt] + x) / (y + x)
                 except ZeroDivisionError:
-                    forward[student][kc][-1] = (y * forward[student][kc][attempt] + x) / 0.001
+                    forward[student][kc][nxt] = (y * forward[student][kc][attempt] + x) / 0.001
             se = 1.0
             for kc in kcs:
                 se *= forward[student][kc][nxt] + (1 - forward[student][kc][nxt]) * learn[kc]
@@ -105,36 +146,34 @@ def filling_forward():
 
 def filling_backward(forward):
     backward = {}
-    for student in range(1, num_student + 1):
+    for student in last.keys():
         backward[student] = {}
-        for kc in range(1, num_kc+1):
+        for kc in knowledge_components:
             backward[student][kc] = {}
-            try:
-                backward[student][kc][last[student]+1] = forward[student][kc][last[student]]
-            except KeyError:
-                pass
+            backward[student][kc][last[student] + 1] = forward[student][kc][last[student]]
+
         for attempt in range(last[student], 0, -1):
             q = question[student][attempt]
             kcs = q_matrix[q]
             se = 1.0
             for kc in kcs:
-                se *= backward[student][kc][attempt+1]
+                se *= backward[student][kc][attempt + 1]
             for kc in kcs:
-                x = learn[kc]*se
-                backward[student][kc][attempt] = (backward[student][kc][attempt+1] - x)/(1-x)
+                x = learn[kc] * se
+                backward[student][kc][attempt] = (backward[student][kc][attempt + 1] - x) / (1 - x)
             ok = 1.0
             for kc in kcs:
                 ok *= backward[student][kc][attempt]
-            x = ok*(1 - (slip[q]+guess[q]))
+            x = ok * (1 - (slip[q] + guess[q]))
             y = guess[q]
             if answer[student][attempt] == 0:
-                y = (1-y)
+                y = (1 - y)
                 x = -x
-            for kc in range(1, num_kc+1):
+            for kc in knowledge_components:
                 if kc in kcs:
-                    backward[student][kc][attempt] = (y*backward[student][kc][attempt] + x)/(y+x)
+                    backward[student][kc][attempt] = (y * backward[student][kc][attempt] + x) / (y + x)
                 else:
-                    backward[student][kc][attempt] = backward[student][kc][attempt+1]
+                    backward[student][kc][attempt] = backward[student][kc][attempt + 1]
     return backward
 
 
@@ -142,22 +181,22 @@ def estimate_kc_mastery():
     forward = filling_forward()
     backward = filling_backward(forward)
     best = {}
-    for student in range(1, num_student+1):
+    for student in last.keys():
         best[student] = {}
-        for kc in range(1, num_kc+1):
+        for kc in knowledge_components:
             best[student][kc] = {}
-            for attempt in range(1, last[student]+1):
-                best[student][kc][attempt] = forward[student][kc][attempt]*backward[student][kc][attempt]
+            for attempt in range(1, last[student] + 1):
+                best[student][kc][attempt] = forward[student][kc][attempt] * backward[student][kc][attempt]
     return best
 
 
 def update_slips_and_guess(best):
-    for _question in range(1, num_question+1):
+    for _question in q_matrix.keys():
         slip_numerator = 0.0
         guess_numerator = 0.0
         denominator = 0.0
-        for student in range(1, num_student+1):
-            for attempt in range(1, last[student]+1):
+        for student in last.keys():
+            for attempt in range(1, last[student] + 1):
                 if _question == question[student][attempt]:
                     ok = 1.0
                     for kc in q_matrix[_question]:
@@ -167,28 +206,28 @@ def update_slips_and_guess(best):
                         guess_numerator += 1 - ok
                     else:
                         slip_numerator += ok
-        slip[_question] = slip_numerator/denominator
-        guess[_question] = guess_numerator/denominator
+        slip[_question] = slip_numerator / denominator
+        guess[_question] = guess_numerator / denominator
 
 
 def update_learn(best):
-    for kc in range(1, num_kc+1):
+    for kc in knowledge_components:
         learn_numerator = 0.0
         learn_denominator = 0.0
-        for student in range(1, num_student+1):
+        for student in last.keys():
             for attempt in range(1, last[student]):
                 kcs = q_matrix[question[student][attempt]]
                 if kc in kcs:
-                    learn_numerator += best[student][kc][attempt+1]*(1-best[student][kc][attempt])
+                    learn_numerator += best[student][kc][attempt + 1] * (1 - best[student][kc][attempt])
                     learn_denominator += 1
-        learn[kc] = learn_numerator/learn_denominator
+        learn[kc] = learn_numerator / learn_denominator
 
 
 def update_initial_mastery(best):
-    for kc in range(1, num_kc+1):
+    for kc in knowledge_components:
         _sum = 0.0
         count = 0
-        for student in range(1, num_student+1):
+        for student in last.keys():
             _sum += best[student][kc][1]
             count += 1
         initial_mastery[kc] = _sum / count
@@ -210,10 +249,10 @@ def save_parameters():
 
 def calculate_change():
     _max = 0
-    m_initial_mastery = max([math.fabs(initial_mastery[i]-s_initial_mastery[i]) for i in initial_mastery])
-    m_learn = max([math.fabs(learn[i]-s_learn[i]) for i in learn])
-    m_slip = max([math.fabs(slip[i]-s_slip[i]) for i in slip])
-    m_guess = max([math.fabs(guess[i]-s_guess[i]) for i in guess])
+    m_initial_mastery = max([math.fabs(initial_mastery[i] - s_initial_mastery[i]) for i in initial_mastery])
+    m_learn = max([math.fabs(learn[i] - s_learn[i]) for i in learn])
+    m_slip = max([math.fabs(slip[i] - s_slip[i]) for i in slip])
+    m_guess = max([math.fabs(guess[i] - s_guess[i]) for i in guess])
     if _max < m_initial_mastery:
         _max = m_initial_mastery
     if _max < m_learn:
@@ -236,19 +275,19 @@ def measure_prediction_error():
 
 
 def train():
-    init()
+    read_real_data("Data/small.txt")
+    #simulated_data()
     fill_parameters_randomly()
     save_parameters()
     change = climb_once()
     while change >= 0.1:
-        print change
-        print initial_mastery
         save_parameters()
         change = climb_once()
     pass
-    #for climb in range(10):
+    # for climb in range(10):
     #   fill_parameters_randomly()
 
 
 if __name__ == "__main__":
     train()
+
